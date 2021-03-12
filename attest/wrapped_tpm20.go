@@ -145,14 +145,9 @@ func (t *wrappedTPM20) newAK(opts *AKConfig) (*AK, error) {
 	}()
 
 	// We can only certify the creation immediately afterwards, so we cache the result.
-	attestation, sig, err := tpm2.CertifyCreation(t.rwc, "", keyHandle, keyHandle, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, tpm2.AlgSHA256, 0}, tix)
+	attestation, signature, err := tpm2.CertifyCreation(t.rwc, "", keyHandle, keyHandle, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, tpm2.AlgSHA256, 0}, tix)
 	if err != nil {
 		return nil, fmt.Errorf("CertifyCreation failed: %v", err)
-	}
-	// Pack the raw structure into a TPMU_SIGNATURE.
-	signature, err := tpmutil.Pack(tpm2.AlgRSASSA, tpm2.AlgSHA256, tpmutil.U16Bytes(sig))
-	if err != nil {
-		return nil, fmt.Errorf("failed to pack TPMT_SIGNATURE: %v", err)
 	}
 	return &AK{ak: newWrappedAK20(keyHandle, blob, pub, creationData, attestation, signature)}, nil
 }
@@ -185,14 +180,9 @@ func (t *wrappedTPM20) newKey(ak *AK, opts *KeyConfig) (*Key, error) {
 	}()
 
 	// Certify application key by AK
-	attestation, sig, err := tpm2.CertifyCreation(t.rwc, "", keyHandle, certifierHandle, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, tpm2.AlgSHA256, 0}, tix)
+	attestation, signature, err := tpm2.CertifyCreation(t.rwc, "", keyHandle, certifierHandle, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, tpm2.AlgSHA256, 0}, tix)
 	if err != nil {
 		return nil, fmt.Errorf("CertifyCreation failed: %v", err)
-	}
-	// Pack the raw structure into a TPMU_SIGNATURE.
-	signature, err := tpmutil.Pack(tpm2.AlgRSASSA, tpm2.AlgSHA256, tpmutil.U16Bytes(sig))
-	if err != nil {
-		return nil, fmt.Errorf("failed to pack TPMT_SIGNATURE: %v", err)
 	}
 
 	tpmPub, _, _, err := tpm2.ReadPublic(t.rwc, keyHandle)
