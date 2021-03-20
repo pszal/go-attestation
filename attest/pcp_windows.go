@@ -58,6 +58,9 @@ var (
 	crypt32CertEnumCertificatesInStore = crypt32.MustFindProc("CertEnumCertificatesInStore")
 	crypt32CertCloseStore              = crypt32.MustFindProc("CertCloseStore")
 
+	tpmAtt                       = windows.MustLoadDLL("TpmAtt.dll")
+	tpmAttGenerateKeyAttestation = tpmAtt.MustFindProc("TpmAttGenerateKeyAttestation")
+
 	tbs              *windows.DLL
 	tbsGetDeviceInfo *windows.Proc
 )
@@ -511,22 +514,55 @@ func (h *winPCP) NewAK(name string) (uintptr, error) {
 	return kh, nil
 }
 
+// NewAK creates a persistent attestation key of the specified name.
+func (h *winPCP) NewKey(name string, ak *AK) (uintptr, error) {
+	var kh uintptr
+	utf16Name, err := windows.UTF16FromString(name)
+	if err != nil {
+		return 0, err
+	}
+	utf16EC, err := windows.UTF16FromString("ECDSA_P256")
+	if err != nil {
+		return 0, err
+	}
+
+	// Create a persistent generic ECDSA key of the specified name.
+	r, _, msg := nCryptCreatePersistedKey.Call(h.hProv, uintptr(unsafe.Pointer(&kh)), uintptr(unsafe.Pointer(&utf16EC[0])), uintptr(unsafe.Pointer(&utf16Name[0])), 0, 0)
+	if r != 0 {
+		if tpmErr := maybeWinErr(r); tpmErr != nil {
+			msg = tpmErr
+		}
+		return 0, fmt.Errorf("NCryptCreatePersistedKey returned %X: %v", r, msg)
+	}
+
+	// Finalize (create) the key.
+	r, _, msg = nCryptFinalizeKey.Call(kh, 0)
+	if r != 0 {
+		if tpmErr := maybeWinErr(r); tpmErr != nil {
+			msg = tpmErr
+		}
+		return 0, fmt.Errorf("NCryptFinalizeKey returned %X: %v", r, msg)
+	}
+
+	return kh, nil
+}
+
 // EKPub returns a BCRYPT_RSA_BLOB structure representing the EK.
 func (h *winPCP) EKPub() ([]byte, error) {
 	return getNCryptBufferProperty(h.hProv, "PCP_EKPUB")
 }
 
-type akProps struct {
+type keyProps struct {
 	RawPublic       []byte
 	RawCreationData []byte
 	RawAttest       []byte
 	RawSignature    []byte
 }
 
-// AKProperties returns the binding properties of the given attestation
+// KeyProperties returns the binding properties of the given attestation
 // key. Note that it is only valid to call this function with the same
 // winPCP handle within which the AK was created.
-func (h *winPCP) AKProperties(kh uintptr) (*akProps, error) {
+func (h *winPCP) KeyProperties(kh uintptr) (*keyProps, error) {
 	idBlob, err := getNCryptBufferProperty(kh, "PCP_TPM12_IDBINDING")
 	if err != nil {
 		return nil, err
@@ -535,16 +571,15 @@ func (h *winPCP) AKProperties(kh uintptr) (*akProps, error) {
 	// Because the TPM 1.2 blob leads with a version tag,
 	// we can switch decoding logic based on it.
 	if bytes.Equal(idBlob[0:4], []byte{1, 1, 0, 0}) {
-		return decodeAKProps12(r)
+		return decodeKeyProps12(r)
 	}
-	return decodeAKProps20(r)
+	return decodeKeyProps20(r)
 }
 
-// decodeAKProps12 separates the single TPM 1.2 blob from the PCP property
-// into its constituents, returning information about the public key
-// of the AK.
-func decodeAKProps12(r *bytes.Reader) (*akProps, error) {
-	var out akProps
+// decodeKeyProps12 separates the single TPM 1.2 blob from the PCP property
+// into its constituents, returning information about the public key.
+func decodeKeyProps12(r *bytes.Reader) (*keyProps, error) {
+	var out keyProps
 	// Skip over fixed-size fields in TPM_IDENTITY_CONTENTS which
 	// we don't need to read.
 	// Specifically: ver, ordinal, & labelPrivCADigest.
@@ -592,12 +627,12 @@ func decodeAKProps12(r *bytes.Reader) (*akProps, error) {
 	return &out, nil
 }
 
-// decodeAKProps20 separates the single TPM 2.0 blob from the PCP property
+// decodeKeyProps20 separates the single TPM 2.0 blob from the PCP property
 // into its constituents. For TPM 2.0 devices, these are bytes representing
 // the following structures: TPM2B_PUBLIC, TPM2B_CREATION_DATA, TPM2B_ATTEST,
 // and TPMT_SIGNATURE.
-func decodeAKProps20(r *bytes.Reader) (*akProps, error) {
-	var out akProps
+func decodeKeyProps20(r *bytes.Reader) (*keyProps, error) {
+	var out keyProps
 
 	var publicSize uint16
 	if err := binary.Read(r, binary.BigEndian, &publicSize); err != nil {

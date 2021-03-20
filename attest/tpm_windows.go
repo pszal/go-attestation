@@ -284,7 +284,7 @@ func (t *windowsTPM) newAK(opts *AKConfig) (*AK, error) {
 	if err != nil {
 		return nil, fmt.Errorf("pcp failed to mint attestation key: %v", err)
 	}
-	props, err := t.pcp.AKProperties(kh)
+	props, err := t.pcp.KeyProperties(kh)
 	if err != nil {
 		closeNCryptObject(kh)
 		return nil, fmt.Errorf("pcp failed to read attestation key properties: %v", err)
@@ -301,17 +301,9 @@ func (t *windowsTPM) newAK(opts *AKConfig) (*AK, error) {
 }
 
 func (t *windowsTPM) loadAK(opaqueBlob []byte) (*AK, error) {
-	sKey, err := deserializeKey(opaqueBlob, t.version)
+	sKey, hnd, err := t.deserializeAndLoad(opaqueBlob)
 	if err != nil {
-		return nil, fmt.Errorf("deserializeKey() failed: %v", err)
-	}
-	if sKey.Encoding != keyEncodingOSManaged {
-		return nil, fmt.Errorf("unsupported key encoding: %x", sKey.Encoding)
-	}
-
-	hnd, err := t.pcp.LoadKeyByName(sKey.Name)
-	if err != nil {
-		return nil, fmt.Errorf("pcp failed to load key: %v", err)
+		return nil, fmt.Errorf("deserializeAndLoad() failed: %v", err)
 	}
 
 	switch t.version {
@@ -324,12 +316,74 @@ func (t *windowsTPM) loadAK(opaqueBlob []byte) (*AK, error) {
 	}
 }
 
-func (t *windowsTPM) newKey(*AK, *KeyConfig) (*Key, error) {
-	return nil, fmt.Errorf("not implemented")
+func (t *windowsTPM) deserializeAndLoad(opaqueBlob []byte) (*serializedKey, uintptr, error) {
+	sKey, err := deserializeKey(opaqueBlob, t.version)
+	if err != nil {
+		return nil, nil, fmt.Errorf("deserializeKey() failed: %v", err)
+	}
+	if sKey.Encoding != keyEncodingOSManaged {
+		return nil, nil, fmt.Errorf("unsupported key encoding: %x", sKey.Encoding)
+	}
+
+	hnd, err := t.pcp.LoadKeyByName(sKey.Name)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pcp failed to load key: %v", err)
+	}
+	return sKey, hnd, nil
+}
+
+func (t *windowsTPM) newKey(ak *AK, *KeyConfig) (*Key, error) {
+	if t.version != TPMVersion20 {
+		return nil, fmt.Errorf("not implemented")
+	}
+	nameHex := make([]byte, 5)
+	if n, err := rand.Read(nameHex); err != nil || n != len(nameHex) {
+		return nil, fmt.Errorf("rand.Read() failed with %d/%d bytes read and error: %v", n, len(nameHex), err)
+	}
+	name := fmt.Sprintf("ak-%x", nameHex)
+
+	kh, err := t.pcp.NewKey(name, ak)
+	if err != nil {
+		return nil, fmt.Errorf("pcp failed to mint attestation key: %v", err)
+	}
+	props, err := t.pcp.KeyProperties(kh)
+	if err != nil {
+		closeNCryptObject(kh)
+		return nil, fmt.Errorf("pcp failed to read attestation key properties: %v", err)
+	}
+
+	tpmPub, _, _, err := DecodePublic(props.Public)
+	if err != nil {
+		return nil, fmt.Errorf("decode public blob: %v", err)
+	}
+	pub, err := tpmPub.Key()
+	if err != nil {
+		return nil, fmt.Errorf("access public key: %v", err)
+	}
+
+	return &Key{key: newWindowsKey20(kh, name, props.RawPublic, props.RawCreationData, props.RawAttest, props.RawSignature ), pub: pub, tpm: t}, nil
 }
 
 func (t *windowsTPM) loadKey(opaqueBlob []byte) (*Key, error) {
-	return nil, fmt.Errorf("not implemented")
+	if t.version != TPMVersion20 {
+		return nil, fmt.Errorf("not implemented")
+	}
+	sKey, hnd, err := t.deserializeAndLoad(opaqueBlob)
+	if err != nil {
+		return nil, fmt.Errorf("deserializeAndLoad() failed: %v", err)
+	}
+	// TODO(szp): check is it encoded the same as with ReadPublic?
+	// or props, err := t.KeyProperties(hnd) ; DecodePublic(props.RawPublic)
+	tpmPub, _, _, err := DecodePublic(sKey.Public)
+	if err != nil {
+		return nil, fmt.Errorf("decode public blob: %v", err)
+	}
+	pub, err := tpmPub.Key()
+	if err != nil {
+		return nil, fmt.Errorf("access public key: %v", err)
+	}
+
+	return &Key{key: newWindowsKey20(hnd, sKey.Name, sKey.Public, sKey.CreateData, sKey.CreateAttestation, sKey.CreateSignature), pub: pub, tpm: t}, nil
 }
 
 func allPCRs12(tpm io.ReadWriter) (map[uint32][]byte, error) {
