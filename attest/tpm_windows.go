@@ -292,9 +292,9 @@ func (t *windowsTPM) newAK(opts *AKConfig) (*AK, error) {
 
 	switch t.version {
 	case TPMVersion12:
-		return &AK{ak: newWindowsKey12(kh, name, props.RawPublic)}, nil
+		return &AK{ak: newWindowsAK12(kh, name, props.RawPublic)}, nil
 	case TPMVersion20:
-		return &AK{ak: newWindowsKey20(kh, name, props.RawPublic, props.RawCreationData, props.RawAttest, props.RawSignature)}, nil
+		return &AK{ak: newWindowsAK20(kh, name, props.RawPublic, props.RawCreationData, props.RawAttest, props.RawSignature)}, nil
 	default:
 		return nil, fmt.Errorf("cannot handle TPM version: %v", t.version)
 	}
@@ -308,9 +308,9 @@ func (t *windowsTPM) loadAK(opaqueBlob []byte) (*AK, error) {
 
 	switch t.version {
 	case TPMVersion12:
-		return &AK{ak: newWindowsKey12(hnd, sKey.Name, sKey.Public)}, nil
+		return &AK{ak: newWindowsAK12(hnd, sKey.Name, sKey.Public)}, nil
 	case TPMVersion20:
-		return &AK{ak: newWindowsKey20(hnd, sKey.Name, sKey.Public, sKey.CreateData, sKey.CreateAttestation, sKey.CreateSignature)}, nil
+		return &AK{ak: newWindowsAK20(hnd, sKey.Name, sKey.Public, sKey.CreateData, sKey.CreateAttestation, sKey.CreateSignature)}, nil
 	default:
 		return nil, fmt.Errorf("cannot handle TPM version: %v", t.version)
 	}
@@ -319,30 +319,35 @@ func (t *windowsTPM) loadAK(opaqueBlob []byte) (*AK, error) {
 func (t *windowsTPM) deserializeAndLoad(opaqueBlob []byte) (*serializedKey, uintptr, error) {
 	sKey, err := deserializeKey(opaqueBlob, t.version)
 	if err != nil {
-		return nil, nil, fmt.Errorf("deserializeKey() failed: %v", err)
+		return nil, 0, fmt.Errorf("deserializeKey() failed: %v", err)
 	}
 	if sKey.Encoding != keyEncodingOSManaged {
-		return nil, nil, fmt.Errorf("unsupported key encoding: %x", sKey.Encoding)
+		return nil, 0, fmt.Errorf("unsupported key encoding: %x", sKey.Encoding)
 	}
 
 	hnd, err := t.pcp.LoadKeyByName(sKey.Name)
 	if err != nil {
-		return nil, nil, fmt.Errorf("pcp failed to load key: %v", err)
+		return nil, 0, fmt.Errorf("pcp failed to load key: %v", err)
 	}
 	return sKey, hnd, nil
 }
 
-func (t *windowsTPM) newKey(ak *AK, *KeyConfig) (*Key, error) {
+func (t *windowsTPM) newKey(ak *AK, _ *KeyConfig) (*Key, error) {
 	if t.version != TPMVersion20 {
-		return nil, fmt.Errorf("not implemented")
+		return nil, fmt.Errorf("expected TPM 2.0, got: %v", t.version)
 	}
+	k, ok := ak.ak.(*windowsKey20)
+	if !ok {
+		return nil, fmt.Errorf("expected *windowsKey20, got: %T", k)
+	}
+
 	nameHex := make([]byte, 5)
 	if n, err := rand.Read(nameHex); err != nil || n != len(nameHex) {
 		return nil, fmt.Errorf("rand.Read() failed with %d/%d bytes read and error: %v", n, len(nameHex), err)
 	}
 	name := fmt.Sprintf("ak-%x", nameHex)
 
-	kh, err := t.pcp.NewKey(name, ak)
+	kh, err := t.pcp.NewKey(name, k.hnd)
 	if err != nil {
 		return nil, fmt.Errorf("pcp failed to mint attestation key: %v", err)
 	}
@@ -361,7 +366,7 @@ func (t *windowsTPM) newKey(ak *AK, *KeyConfig) (*Key, error) {
 		return nil, fmt.Errorf("access public key: %v", err)
 	}
 
-	return &Key{key: newWindowsKey20(kh, name, props.RawPublic, props.RawCreationData, props.RawAttest, props.RawSignature ), pub: pub, tpm: t}, nil
+	return &Key{key: newWindowsKey20(kh, name, props.RawPublic, props.RawCreationData, props.RawAttest, props.RawSignature), pub: pub, tpm: t}, nil
 }
 
 func (t *windowsTPM) loadKey(opaqueBlob []byte) (*Key, error) {

@@ -21,9 +21,11 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"math/big"
 	"syscall"
 	"unsafe"
 
+	"github.com/google/certificate-transparency-go/asn1"
 	"github.com/google/certificate-transparency-go/x509"
 
 	"github.com/google/go-tpm/tpmutil"
@@ -53,12 +55,15 @@ var (
 	nCryptCreatePersistedKey  = nCrypt.MustFindProc("NCryptCreatePersistedKey")
 	nCryptFinalizeKey         = nCrypt.MustFindProc("NCryptFinalizeKey")
 	nCryptDeleteKey           = nCrypt.MustFindProc("NCryptDeleteKey")
+	nCryptCreateClaim         = nCrypt.MustFindProc("NCryptCreateClaim")
+	nCryptSignHash            = nCrypt.MustFindProc("NCryptSignHash")
 
 	crypt32                            = windows.MustLoadDLL("crypt32.dll")
 	crypt32CertEnumCertificatesInStore = crypt32.MustFindProc("CertEnumCertificatesInStore")
 	crypt32CertCloseStore              = crypt32.MustFindProc("CertCloseStore")
 
-	tpmAtt                       = windows.MustLoadDLL("TpmAtt.dll")
+	// TODO(szp): drop?
+	tpmAtt                       = windows.MustLoadDLL("tpmatt.dll")
 	tpmAttGenerateKeyAttestation = tpmAtt.MustFindProc("TpmAttGenerateKeyAttestation")
 
 	tbs              *windows.DLL
@@ -514,7 +519,7 @@ func (h *winPCP) NewAK(name string) (uintptr, error) {
 	return kh, nil
 }
 
-// NewAK creates a persistent attestation key of the specified name.
+// NewKey creates a persistent application key of the specified name.
 func (h *winPCP) NewKey(name string, ak *AK) (uintptr, error) {
 	var kh uintptr
 	utf16Name, err := windows.UTF16FromString(name)
@@ -545,6 +550,18 @@ func (h *winPCP) NewKey(name string, ak *AK) (uintptr, error) {
 	}
 
 	return kh, nil
+}
+
+// CertifyKey attests the properties of the key with the `kh` handle by the
+// cerifying key with the `ah` handle.
+func (h *winPCP) CertifyKey(name string, kh, ah uintptr) ([]byte, error) {
+	r, _, msg := tpmAttGenerateKeyAttestation.Call(ah, kh, 0, 0)
+	if r != 0 {
+		if tpmErr := maybeWinErr(r); tpmErr != nil {
+			msg = tpmErr
+		}
+		return nil, fmt.Errorf("NCryptCreatePersistedKey returned %X: %v", r, msg)
+	}
 }
 
 // EKPub returns a BCRYPT_RSA_BLOB structure representing the EK.
@@ -711,6 +728,44 @@ func (h *winPCP) ActivateCredential(hKey uintptr, activationBlob []byte) ([]byte
 		return nil, fmt.Errorf("NCryptGetProperty returned %X (%v) for key activation", r, msg)
 	}
 	return secretBuff[:size], nil
+}
+
+// Sign signs digest using the underlying TPM key.
+func (h *winPCP) Sign(hKey uintptr, digest []byte) ([]byte, error) {
+	var size uint32
+	// sign and get signature size
+	r, _, msg := nCryptSignHash.Call(hKey, 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), 0, 0, uintptr(unsafe.Pointer(&size)), 0)
+	if r != 0 {
+		if tpmErr := maybeWinErr(r); tpmErr != nil {
+			msg = tpmErr
+		}
+		return nil, fmt.Errorf("NCryptSignHash returned %X (%v)", r, msg)
+	}
+	if size == 0 {
+		return nil, fmt.Errorf("NCryptSignHash returned empty signature")
+	}
+	sig := make([]byte, size)
+	// read signature
+	r, _, msg = nCryptSignHash.Call(hKey, 0, uintptr(unsafe.Pointer(&digest[0])), uintptr(len(digest)), uintptr(unsafe.Pointer(&sig[0])), uintptr(size), uintptr(unsafe.Pointer(&size)), 0)
+	if r != 0 {
+		if tpmErr := maybeWinErr(r); tpmErr != nil {
+			msg = tpmErr
+		}
+		return nil, fmt.Errorf("NCryptSignHash returned %X (%v)", r, msg)
+	}
+	if size == 0 {
+		return nil, fmt.Errorf("NCryptSignHash returned empty signature")
+	}
+	// encode and return signature
+	// TODO(szp): double-check the format (tpm2.Sign() encodes a signature type)
+	R := big.NewInt(0)
+	S := big.NewInt(0)
+	R.SetBytes(sig[:size/2])
+	S.SetBytes(sig[size/2:])
+	return asn1.Marshal(struct {
+		R *big.Int
+		S *big.Int
+	}{R, S})
 }
 
 // openPCP initializes a reference to the Microsoft PCP provider.

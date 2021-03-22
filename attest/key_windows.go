@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	tpm1 "github.com/google/go-tpm/tpm"
-	"github.com/google/go-tpm/tpmutil"
 )
 
 // windowsKey12 represents a Windows-managed key on a TPM1.2 TPM.
@@ -30,7 +29,7 @@ type windowsKey12 struct {
 	public     []byte
 }
 
-func newWindowsKey12(hnd uintptr, pcpKeyName string, public []byte) ak {
+func newWindowsAK12(hnd uintptr, pcpKeyName string, public []byte) ak {
 	return &windowsKey12{
 		hnd:        hnd,
 		pcpKeyName: pcpKeyName,
@@ -112,10 +111,6 @@ func (k *windowsKey12) attestationParameters() AttestationParameters {
 	}
 }
 
-func (k *windowsKey12) handle() (tpmutil.Handle, error) {
-	return 0, fmt.Errorf("not implemented")
-}
-
 // windowsKey20 represents a key bound to a TPM 2.0.
 type windowsKey20 struct {
 	hnd uintptr
@@ -127,7 +122,18 @@ type windowsKey20 struct {
 	createSignature   []byte
 }
 
-func newWindowsKey20(hnd uintptr, pcpKeyName string, public, createData, createAttest, createSig []byte) ak {
+func newWindowsAK20(hnd uintptr, pcpKeyName string, public, createData, createAttest, createSig []byte) ak {
+	return &windowsKey20{
+		hnd:               hnd,
+		pcpKeyName:        pcpKeyName,
+		public:            public,
+		createData:        createData,
+		createAttestation: createAttest,
+		createSignature:   createSig,
+	}
+}
+
+func newWindowsKey20(hnd uintptr, pcpKeyName string, public, createData, createAttest, createSig []byte) key {
 	return &windowsKey20{
 		hnd:               hnd,
 		pcpKeyName:        pcpKeyName,
@@ -190,6 +196,23 @@ func (k *windowsKey20) attestationParameters() AttestationParameters {
 	}
 }
 
-func (k *windowsKey20) handle() (tpmutil.Handle, error) {
-	return 0, fmt.Errorf("not implemented")
+func (k *windowsKey20) certificationParameters() CertificationParameters {
+	return CertificationParameters{
+		Public:            k.public,
+		CreateData:        k.createData,
+		CreateAttestation: k.createAttestation,
+		CreateSignature:   k.createSignature,
+	}
+}
+
+func (k *windowsKey20) sign(tb tpmBase, digest []byte) ([]byte, error) {
+	t, ok := tb.(*windowsTPM20)
+	if !ok {
+		return nil, fmt.Errorf("expected *windowsTPM20, got %T", tb)
+	}
+	return nil, fmt.Errorf("unsupported signature type: %v", sig.Alg)
+}
+
+func (k *windowsKey20) decrypt(tb tpmBase, ctxt []byte) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
 }

@@ -159,9 +159,9 @@ func (t *wrappedTPM20) newAK(opts *AKConfig) (*AK, error) {
 
 func (t *wrappedTPM20) newKey(ak *AK, opts *KeyConfig) (*Key, error) {
 	// TODO(szp): TODO(jsonp): Abstract choice of hierarchy & parent.
-	certifierHandle, err := ak.ak.handle()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get AK's handle: %v", err)
+	k, ok := ak.ak.(*wrappedKey20)
+	if !ok {
+		return nil, fmt.Errorf("expected *wrappedKey20, got: %T", k)
 	}
 
 	srk, _, err := t.getPrimaryKeyHandle(commonSrkEquivalentHandle)
@@ -185,7 +185,7 @@ func (t *wrappedTPM20) newKey(ak *AK, opts *KeyConfig) (*Key, error) {
 	}()
 
 	// Certify application key by AK
-	attestation, sig, err := tpm2.CertifyCreation(t.rwc, "", keyHandle, certifierHandle, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, tpm2.AlgSHA256, 0}, tix)
+	attestation, sig, err := tpm2.CertifyCreation(t.rwc, "", keyHandle, k.hnd, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, tpm2.AlgSHA256, 0}, tix)
 	if err != nil {
 		return nil, fmt.Errorf("CertifyCreation failed: %v", err)
 	}
@@ -394,10 +394,6 @@ func (k *wrappedKey20) certificationParameters() CertificationParameters {
 		CreateAttestation: k.createAttestation,
 		CreateSignature:   k.createSignature,
 	}
-}
-
-func (k *wrappedKey20) handle() (tpmutil.Handle, error) {
-	return k.hnd, nil
 }
 
 func (k *wrappedKey20) sign(tb tpmBase, digest []byte) ([]byte, error) {
