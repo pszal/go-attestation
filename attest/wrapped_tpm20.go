@@ -164,10 +164,10 @@ func (t *wrappedTPM20) newKey(ak *AK, opts *KeyConfig) (*Key, error) {
 	if !ok {
 		return nil, fmt.Errorf("expected *wrappedKey20, got: %T", k)
 	}
-	return newKey(t, k.hnd)
+	return newKey(t, k.hnd, tpm2.AlgSHA256)
 }
 
-func newKey(tb tpmBase, akHnd tpmutil.Handle) (*Key, error) {
+func newKey(tb tpmBase, akHnd tpmutil.Handle, akHash tpm2.Algorithm) (*Key, error) {
 	rwc, err := tb.channel()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get command channel, TPM type: %T, err: %v", tb, err)
@@ -193,7 +193,7 @@ func newKey(tb tpmBase, akHnd tpmutil.Handle) (*Key, error) {
 	}()
 
 	// Certify application key by AK
-	attestation, sig, err := tpm2.CertifyCreation(rwc, "", keyHandle, akHnd, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, tpm2.AlgSHA256, 0}, tix)
+	attestation, sig, err := tpm2.CertifyCreation(rwc, "", keyHandle, akHnd, nil, creationHash, tpm2.SigScheme{tpm2.AlgRSASSA, akHash, 0}, tix)
 	if err != nil {
 		return nil, fmt.Errorf("CertifyCreation failed: %v", err)
 	}
@@ -338,12 +338,12 @@ func (k *wrappedKey20) marshal() ([]byte, error) {
 	}).Serialize()
 }
 
-func (k *wrappedKey20) close(t tpmBase) error {
-	tpm, ok := t.(*wrappedTPM20)
-	if !ok {
-		return fmt.Errorf("expected *wrappedTPM20, got %T", t)
+func (k *wrappedKey20) close(tb tpmBase) error {
+	rwc, err := tb.channel()
+	if err != nil {
+		return fmt.Errorf("failed to get command channel, TPM type: %T, err: %v", tb, err)
 	}
-	return tpm2.FlushContext(tpm.rwc, k.hnd)
+	return tpm2.FlushContext(rwc, k.hnd)
 }
 
 func (k *wrappedKey20) activateCredential(tb tpmBase, in EncryptedCredential) ([]byte, error) {

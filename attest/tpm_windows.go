@@ -29,6 +29,7 @@ import (
 	"math/big"
 
 	tpm1 "github.com/google/go-tpm/tpm"
+	"github.com/google/go-tpm/tpm2"
 	tpmtbs "github.com/google/go-tpm/tpmutil/tbs"
 	"golang.org/x/sys/windows"
 )
@@ -324,7 +325,7 @@ func (t *windowsTPM) loadAK(opaqueBlob []byte) (*AK, error) {
 	}
 }
 
-func (t *windowsTPM) newKey(*AK, *KeyConfig) (*Key, error) {
+func (t *windowsTPM) newKey(ak *AK, opts *KeyConfig) (*Key, error) {
 	winAK, ok := ak.ak.(*windowsKey20)
 	if !ok {
 		return nil, fmt.Errorf("expected *windowsKey20, got: %T", ak.ak)
@@ -333,7 +334,8 @@ func (t *windowsTPM) newKey(*AK, *KeyConfig) (*Key, error) {
 	if err != nil {
 		return nil, fmt.Errorf("TPMKeyHandle() failed: %v", err)
 	}
-	return newKey(t, akHnd)
+	// on Windows attestations use SHA1
+	return newKey(t, akHnd, tpm2.AlgSHA1)
 }
 
 func (t *windowsTPM) loadKey(opaqueBlob []byte) (*Key, error) {

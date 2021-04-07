@@ -104,6 +104,9 @@ func (p *CertificationParameters) Verify(opts VerifyOpts) error {
 	if err != nil {
 		return fmt.Errorf("HashConstructor() failed: %v", err)
 	}
+	if !nameHash.Available() {
+		return fmt.Errorf("hash function is unavailable")
+	}
 	h := nameHash.New()
 	h.Write(p.CreateData)
 	if !bytes.Equal(att.AttestedCreationInfo.OpaqueDigest, h.Sum(nil)) {
