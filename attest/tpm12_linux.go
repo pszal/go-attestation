@@ -20,6 +20,7 @@ import (
 	"crypto"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"io/ioutil"
 
 	"github.com/google/certificate-transparency-go/x509"
@@ -169,4 +170,8 @@ func (t *trousersTPM) pcrs(alg HashAlg) ([]PCR, error) {
 
 func (t *trousersTPM) measurementLog() ([]byte, error) {
 	return ioutil.ReadFile("/sys/kernel/security/tpm0/binary_bios_measurements")
+}
+
+func (t *trousersTPM) channel() (io.ReadWriteCloser, error) {
+	return nil, fmt.Errorf("not implemented")
 }

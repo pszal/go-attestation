@@ -325,11 +325,19 @@ func (t *windowsTPM) loadAK(opaqueBlob []byte) (*AK, error) {
 }
 
 func (t *windowsTPM) newKey(*AK, *KeyConfig) (*Key, error) {
-	return nil, fmt.Errorf("not implemented")
+	winAK, ok := ak.ak.(*windowsKey20)
+	if !ok {
+		return nil, fmt.Errorf("expected *windowsKey20, got: %T", ak.ak)
+	}
+	akHnd, err := t.pcp.TPMKeyHandle(winAK.hnd)
+	if err != nil {
+		return nil, fmt.Errorf("TPMKeyHandle() failed: %v", err)
+	}
+	return newKey(t, akHnd)
 }
 
 func (t *windowsTPM) loadKey(opaqueBlob []byte) (*Key, error) {
-	return nil, fmt.Errorf("not implemented")
+	return loadKey(t, opaqueBlob)
 }
 
 func allPCRs12(tpm io.ReadWriter) (map[uint32][]byte, error) {
@@ -411,4 +419,8 @@ func (t *windowsTPM) measurementLog() ([]byte, error) {
 		return nil, err
 	}
 	return logBuffer, nil
+}
+
+func (t *windowsTPM) channel() (io.ReadWriteCloser, error) {
+	return t.pcp.TPMCommandInterface()
 }

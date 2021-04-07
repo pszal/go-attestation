@@ -299,6 +299,7 @@ type tpmBase interface {
 	newKey(ak *AK, opts *KeyConfig) (*Key, error)
 	pcrs(alg HashAlg) ([]PCR, error)
 	measurementLog() ([]byte, error)
+	channel() (io.ReadWriteCloser, error)
 }
 
 //TPM interfaces with a TPM device on the system.
